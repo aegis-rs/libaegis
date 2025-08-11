@@ -36,7 +36,9 @@ publishing {
             url = uri("https://maven.pkg.github.com/aegis-rs/libaegis")
             credentials {
                 username = findProperty("github.user") as String?
+                    ?: System.getenv("GITHUB_USER")
                 password = findProperty("github.token") as String?
+                    ?: System.getenv("GITHUB_TOKEN")
             }
         }
     }
