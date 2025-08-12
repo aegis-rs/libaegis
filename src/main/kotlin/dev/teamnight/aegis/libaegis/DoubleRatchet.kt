@@ -58,18 +58,14 @@ class HKDF {
     companion object {
         fun extract(salt: ByteArray, ikm: ByteArray): ByteArray {
             val hkdf = HKDFBytesGenerator(SHA256Digest())
-            val params = HKDFParameters(ikm, salt, null)
-            hkdf.init(params)
-
-            val prk = ByteArray(32)
-            hkdf.generateBytes(prk, 0, 32)
+            val prk = hkdf.extractPRK(salt, ikm)
 
             return prk
         }
 
         fun expand(prk: ByteArray, info: ByteArray, length: Int): ByteArray {
             val hkdf = HKDFBytesGenerator(SHA256Digest())
-            val params = HKDFParameters(null, prk, info)
+            val params = HKDFParameters.skipExtractParameters(prk, info)
             hkdf.init(params)
 
             val result = ByteArray(length)
@@ -143,7 +139,7 @@ data class RatchetKey(
     val privateKey: PrivateKey? = null
 )
 
-class ECDHResult(val privateKey: PrivateKey, val publicKey: PublicKey) {
+class ECDHResult(privateKey: PrivateKey, publicKey: PublicKey) {
     val arrayResult: ByteArray
 
     init {
@@ -169,7 +165,6 @@ class RootKey(
     }
 
     companion object {
-        val MASTER_SECRET_SALT: ByteArray = byteArrayOf(0x00)
         val INITIAL_ROOT_KEY_INFO   = "AegisRootKey".toByteArray()
 
         val RATCHET_INFO = "AegisRatchet".toByteArray()
@@ -195,7 +190,7 @@ class RootKey(
             }
 
             //Get Master Secret from HKDF
-            val masterSecret = HKDF.extract(MASTER_SECRET_SALT, result)
+            val masterSecret = HKDF.extract(ByteArray(32), result)
 
             //Generate initial root key and chain key
             val combinedKeys = HKDF.expand(masterSecret, INITIAL_ROOT_KEY_INFO, 64)
@@ -213,6 +208,14 @@ val ChainKeySeed = byteArrayOf(0x02)
 class ChainKey(
     val bytes: ByteArray
 ) {
+    /**
+     * **This function is used by @{DoubleRatchet#createNextSendingChainKey()} or
+     * @{DoubleRatchet#createNextReceivingChainKey()}**.
+     *
+     * Generates the next chain key in the ratchet
+     *
+     * @return next chain key
+     */
     fun nextChainKey(): ChainKey {
         val hmac = HMac(SHA256Digest())
         hmac.init(KeyParameter(this.bytes))
@@ -224,7 +227,10 @@ class ChainKey(
         return ChainKey(result)
     }
 
-    val messageKey: MessageKey
+    /**
+     * Returns the message keys generated from the chain key.
+     */
+    val messageKeys: MessageKeys
         get() {
             val hmac = HMac(SHA256Digest())
             hmac.init(KeyParameter(this.bytes))
@@ -233,21 +239,33 @@ class ChainKey(
             val result = ByteArray(32)
             hmac.doFinal(result, 0)
 
-            return MessageKey(result)
+            return MessageKeys(result)
         }
 }
 
-class MessageKey(val bytes: ByteArray) {
+/**
+ * Message Keys for usage in encryption algorithms.
+ *
+ * You can use this to initialize a cipher like ChaCha20-Poly1305.
+ *
+ * Example:
+ *
+ *
+ * @property cipherKey Secret key for cipher
+ * @property macKey Secret key for MAC
+ * @property iv Initialization vector
+ */
+class MessageKeys(val bytes: ByteArray) {
     val cipherKey: ByteArray
     val macKey: ByteArray
     val iv: ByteArray
 
     init {
-        val prk = HKDF.extract(this.bytes, ByteArray(32))
-        val result = HKDF.expand(prk, "AegisMessageKey".toByteArray(), 80)
+        val prk = HKDF.extract(ByteArray(32), this.bytes)
+        val result = HKDF.expand(prk, "AegisMessageKey".toByteArray(), 72)
 
         this.cipherKey = result.copyOfRange(0, 32)
-        this.macKey = result.copyOfRange(32, 48)
-        this.iv = result.copyOfRange(48, 64)
+        this.macKey = result.copyOfRange(32, 64)
+        this.iv = result.copyOfRange(64, 72)
     }
 }
