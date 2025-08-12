@@ -1,37 +1,54 @@
 package dev.teamnight.aegis.libaegis
 
-import org.bouncycastle.crypto.digests.SHA256Digest
-import org.bouncycastle.crypto.generators.HKDFBytesGenerator
-import org.bouncycastle.crypto.macs.HMac
-import org.bouncycastle.crypto.params.HKDFParameters
-import org.bouncycastle.crypto.params.KeyParameter
-import java.security.KeyPairGenerator
-import java.security.PrivateKey
+import dev.teamnight.aegis.libaegis.crypto.ECDHResult
+import dev.teamnight.aegis.libaegis.key.ChainKey
+import dev.teamnight.aegis.libaegis.key.MessageKeys
+import dev.teamnight.aegis.libaegis.key.RatchetKey
+import dev.teamnight.aegis.libaegis.key.RootKey
+import dev.teamnight.aegis.libaegis.key.publicKeyFromRaw
+import dev.teamnight.aegis.libaegis.key.raw
+import java.io.Serializable
+import java.nio.ByteBuffer
 import java.security.PublicKey
-import javax.crypto.KeyAgreement
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class DoubleRatchet private constructor(
     var rootKey: RootKey,
-    val receivedRatchetKey: RatchetKey? = null,
+    var receivedRatchetKey: RatchetKey? = null,
+    var ownRatchetKey: RatchetKey = RatchetKey.generate(),
     var receivingChainKey: ChainKey? = null,
-    var sendingChainKey: ChainKey? = null
-) {
-    val ownRatchetKey: RatchetKey
+    var sendingChainKey: ChainKey? = null,
+    val skippedMessageKeys: MutableMap<Pair<PublicKey, Int>, MessageKeys> = mutableMapOf()
+) : Serializable {
 
-    init {
-        val kpg = KeyPairGenerator.getInstance("X25519")
-        val pair = kpg.generateKeyPair()
+    var lastSendingChainMessageAmount: Int = 0
+    var sendingMessageNumber: Int = 0
+    var receivingMessageNumber: Int = 0
 
-        ownRatchetKey = RatchetKey(pair.public, pair.private)
-    }
-
-    constructor(keys: Pair<RootKey, ChainKey>,
-                receivedRatchetKey: RatchetKey?
+    /**
+     * Creates a new double ratchet state from the given keys.
+     *
+     * **Do not use this constructor when trying to reinstantiate an already established double ratchet state, this
+     * will result in an invalid state on the other side! Instead, use [DoubleRatchet.fromExisting]**
+     *
+     * If the received ratchet key is not null, the chain key provided will be treated as the receiving chain key,
+     * otherwise it will be treated as the sending chain key.
+     *
+     * @param keys The root key and the chain key to use
+     * @param receivedRatchetKey The received ratchet key
+     * @param ownRatchetKey The own ratchet key
+     */
+    constructor(
+        keys: Pair<RootKey, ChainKey>,
+        receivedRatchetKey: RatchetKey?,
+        ownRatchetKey: RatchetKey = RatchetKey.generate()
     ) : this(
         keys.first,
         receivedRatchetKey,
-        null,
-        null
+        receivingChainKey = null,
+        sendingChainKey = null
     ) {
         if(receivedRatchetKey != null) {
             receivingChainKey = keys.second
@@ -45,227 +62,190 @@ class DoubleRatchet private constructor(
         }
     }
 
-    fun createNextReceivingChainKey(): ChainKey? {
-        return this.receivingChainKey?.nextChainKey()
-    }
+    /**
+     * Encrypts the given message using the sending chain key.
+     *
+     * @param message The message to encrypt
+     * @return The encrypted message
+     */
+    fun encrypt(message: ByteArray): Ciphertext {
+        val chainKey = sendingChainKey ?: throw IllegalStateException("Cannot encrypt without sending chain key")
 
-    fun createNextSendingChainKey(): ChainKey? {
-        return this.sendingChainKey?.nextChainKey()
-    }
-}
+        this.sendingChainKey = chainKey.nextChainKey()
 
-class HKDF {
-    companion object {
-        fun extract(salt: ByteArray, ikm: ByteArray): ByteArray {
-            val hkdf = HKDFBytesGenerator(SHA256Digest())
-            val prk = hkdf.extractPRK(salt, ikm)
-
-            return prk
+        if(ownRatchetKey.publicKey == null) {
+            throw IllegalStateException("Own ratchet public key is null?")
         }
 
-        fun expand(prk: ByteArray, info: ByteArray, length: Int): ByteArray {
-            val hkdf = HKDFBytesGenerator(SHA256Digest())
-            val params = HKDFParameters.skipExtractParameters(prk, info)
-            hkdf.init(params)
+        val header = Header(ownRatchetKey.publicKey!!.raw, lastSendingChainMessageAmount, sendingMessageNumber)
+        val headerBytes = header.toBytes()
 
-            val result = ByteArray(length)
-            hkdf.generateBytes(result, 0, length)
+        val aeadBytes = ByteArray(headerBytes.size + 12)
 
-            return result
+        val messageKeys = chainKey.messageKeys
+        messageKeys.iv.copyInto(aeadBytes)
+        headerBytes.copyInto(aeadBytes, 12)
+
+        sendingMessageNumber++
+
+        val cipher = Cipher.getInstance("ChaCha20-Poly1305/None/NoPadding")
+        val spec = SecretKeySpec(messageKeys.cipherKey, "ChaCha20")
+        val paramSpec = IvParameterSpec(messageKeys.iv)
+        cipher.init(Cipher.ENCRYPT_MODE, spec, paramSpec)
+        cipher.updateAAD(headerBytes)
+
+        return Ciphertext(cipher.doFinal(message), aeadBytes)
+    }
+
+    /**
+     * Decrypts the given ciphertext using the receiving chain key.
+     *
+     * This method might perform a ratchet step in case the receiving DH ratchet key does not match the saved one.
+     *
+     * @param ciphertext The ciphertext to decrypt
+     * @return The decrypted message
+     */
+    fun decrypt(ciphertext: Ciphertext): ByteArray {
+        //Update chain key
+        val chainKey = receivingChainKey ?: throw IllegalStateException("Cannot decrypt without receiving chain key")
+        val messageKeys = chainKey.messageKeys
+
+        this.receivingChainKey = chainKey.nextChainKey()
+
+        //TODO: Add processing skipped chain keys
+
+        val header = Header.fromBytes(ciphertext.headerBytes)
+        val headerPublicKey = publicKeyFromRaw(header.dhPublicKey)
+
+        val skippedPair = Pair(headerPublicKey, header.messageNumber)
+
+        if(skippedMessageKeys.containsKey(skippedPair)) {
+            val skippedMessageKeys = skippedMessageKeys[skippedPair]!!
+            this.skippedMessageKeys.remove(skippedPair)
+
+            return doDecrypt(ciphertext, skippedMessageKeys)
+        }
+
+        if(!headerPublicKey.encoded.contentEquals(receivedRatchetKey?.publicKey?.encoded)) {
+            skipMessages(header.lastSendingChainMessageAmount)
+            doRatchet(header, RatchetKey(headerPublicKey))
+        }
+
+        //Skip to message number of this ciphertext
+        skipMessages(header.messageNumber)
+
+        receivingMessageNumber++
+
+        return doDecrypt(ciphertext, messageKeys)
+    }
+
+    private fun skipMessages(until: Int) {
+        while(receivingMessageNumber < until) {
+            val chainKey = receivingChainKey ?: throw IllegalStateException("Cannot decrypt without receiving chain key")
+
+            this.receivingChainKey = chainKey.nextChainKey()
+            this.skippedMessageKeys[Pair(receivedRatchetKey!!.publicKey!!, receivingMessageNumber)] = chainKey.messageKeys
+            this.receivingMessageNumber++
         }
     }
-}
 
-/**
- * The X25519 identity key pair for usage in X3DH.
- *
- * @property publicKey The public key
- * @property privateKey The private key
- */
-data class IdentityKeyPair(
-    val publicKey: PublicKey,
-    val privateKey: PrivateKey? = null
-)
+    private fun doDecrypt(ciphertext: Ciphertext, keys: MessageKeys): ByteArray {
+        val cipher = Cipher.getInstance("ChaCha20-Poly1305/None/NoPadding")
+        val spec = SecretKeySpec(keys.cipherKey, "ChaCha20")
+        val paramSpec = IvParameterSpec(keys.iv)
 
-/**
- * The X25519 signed pre-key pair for usage in X3DH.
- *
- * @property publicKey The public key
- * @property signature The signature
- * @property privateKey The private key
- */
-data class SignedPreKey(
-    val publicKey: PublicKey,
-    val signature: ByteArray,
-    val privateKey: PrivateKey? = null
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
+        cipher.init(Cipher.DECRYPT_MODE, spec, paramSpec)
+        cipher.updateAAD(ciphertext.headerBytes)
 
-        other as SignedPreKey
-
-        if (publicKey != other.publicKey) return false
-        if (!signature.contentEquals(other.signature)) return false
-        if (privateKey != other.privateKey) return false
-
-        return true
+        return cipher.doFinal(ciphertext.bytes)
     }
 
-    override fun hashCode(): Int {
-        var result = publicKey.hashCode()
-        result = 31 * result + signature.contentHashCode()
-        result = 31 * result + (privateKey?.hashCode() ?: 0)
-        return result
-    }
-}
+    private fun doRatchet(header: Header, receivedKey: RatchetKey) {
+        this.lastSendingChainMessageAmount = this.sendingMessageNumber
+        this.sendingMessageNumber = 0
+        this.receivingMessageNumber = 0
 
-/**
- * The X25519 one-time pre-key pair for usage in X3DH.
- *
- * @property publicKey The public key
- * @property privateKey The private key
- */
-data class OnetimePreKey(
-    val publicKey: PublicKey,
-    val privateKey: PrivateKey? = null
-)
+        this.receivedRatchetKey = receivedKey
 
-/**
- * The
- */
-data class RatchetKey(
-    val publicKey: PublicKey? = null,
-    val privateKey: PrivateKey? = null
-)
+        val ecdh = ECDHResult(ownRatchetKey.privateKey!!, receivedKey.publicKey!!)
+        val pair = rootKey.nextRootKey(ecdh)
 
-class ECDHResult(privateKey: PrivateKey, publicKey: PublicKey) {
-    val arrayResult: ByteArray
+        this.rootKey = pair.first
+        this.receivingChainKey = pair.second
 
-    init {
-        val ka = KeyAgreement.getInstance("X25519")
-        ka.init(privateKey)
-        ka.doPhase(publicKey, true)
+        //Generate new DH Ratchet key
+        this.ownRatchetKey = RatchetKey.generate()
 
-        this.arrayResult = ka.generateSecret()
-    }
-}
+        val ecdh2 = ECDHResult(ownRatchetKey.privateKey!!, receivedKey.publicKey)
+        val pair2 = rootKey.nextRootKey(ecdh)
 
-class RootKey(
-    val bytes: ByteArray,
-) {
-    fun nextRootKey(pair: ECDHResult): Pair<RootKey, ChainKey>  {
-        val prk = HKDF.extract(bytes, pair.arrayResult)
-
-        val combinedKeys = HKDF.expand(prk, RATCHET_INFO, 64)
-        val rootKey = combinedKeys.copyOfRange(0, 32)
-        val chainKey = combinedKeys.copyOfRange(32, 64)
-
-        return RootKey(rootKey) to ChainKey(chainKey)
+        this.rootKey = pair2.first
+        this.sendingChainKey = pair2.second
     }
 
     companion object {
-        val INITIAL_ROOT_KEY_INFO   = "AegisRootKey".toByteArray()
-
-        val RATCHET_INFO = "AegisRatchet".toByteArray()
-
         /**
-         * Generates the master secret, which is used to derive the root key and the chain key.
-         *
-         * Depending which side we are, this is either the sending chain key or the receiving chain key.
-         *
-         * @param results The 3 or 4 DH results
-         *
-         * @return The root key
+         * Initializes a double ratchet state from an existing one.
          */
-        fun generateInitialRootKey(results: Array<ECDHResult>): Pair<RootKey, ChainKey> {
-            val len = results.sumOf { it.arrayResult.size }
+        fun fromExisting(
+            rootKey: RootKey,
+            receivedRatchetKey: RatchetKey,
+            ownRatchetKey: RatchetKey,
+            receivingChainKey: ChainKey,
+            sendingChainKey: ChainKey,
+            lastSendingChainMessageAmount: Int,
+            receivingMessageNumber: Int,
+            sendingMessageNumber: Int,
+            skippedMessageKeys: MutableMap<Pair<PublicKey, Int>, MessageKeys>
+        ): DoubleRatchet {
+            val dh = DoubleRatchet(
+                rootKey,
+                receivedRatchetKey,
+                ownRatchetKey,
+                receivingChainKey,
+                sendingChainKey,
+                skippedMessageKeys
+            )
 
-            //Concatenate all the DH results
-            val result = ByteArray(len)
-            var offset = 0
-            for (res in results) {
-                res.arrayResult.copyInto(result, offset)
-                offset += res.arrayResult.size
-            }
+            dh.lastSendingChainMessageAmount = lastSendingChainMessageAmount
+            dh.receivingMessageNumber = receivingMessageNumber
+            dh.sendingMessageNumber = sendingMessageNumber
 
-            //Get Master Secret from HKDF
-            val masterSecret = HKDF.extract(ByteArray(32), result)
-
-            //Generate initial root key and chain key
-            val combinedKeys = HKDF.expand(masterSecret, INITIAL_ROOT_KEY_INFO, 64)
-            val rootKey = combinedKeys.copyOfRange(0, 32)
-            val chainKey = combinedKeys.copyOfRange(32, 64)
-
-            return RootKey(rootKey) to ChainKey(chainKey)
+            return dh
         }
     }
 }
 
-val MessageKeySeed = byteArrayOf(0x01)
-val ChainKeySeed = byteArrayOf(0x02)
-
-class ChainKey(
-    val bytes: ByteArray
-) {
-    /**
-     * **This function is used by @{DoubleRatchet#createNextSendingChainKey()} or
-     * @{DoubleRatchet#createNextReceivingChainKey()}**.
-     *
-     * Generates the next chain key in the ratchet
-     *
-     * @return next chain key
-     */
-    fun nextChainKey(): ChainKey {
-        val hmac = HMac(SHA256Digest())
-        hmac.init(KeyParameter(this.bytes))
-        hmac.update(ChainKeySeed, 0, ChainKeySeed.size)
-
-        val result = ByteArray(32)
-        hmac.doFinal(result, 0)
-
-        return ChainKey(result)
-    }
-
-    /**
-     * Returns the message keys generated from the chain key.
-     */
-    val messageKeys: MessageKeys
-        get() {
-            val hmac = HMac(SHA256Digest())
-            hmac.init(KeyParameter(this.bytes))
-            hmac.update(MessageKeySeed, 0, MessageKeySeed.size)
-
-            val result = ByteArray(32)
-            hmac.doFinal(result, 0)
-
-            return MessageKeys(result)
-        }
-}
+class Ciphertext(val bytes: ByteArray, val headerBytes: ByteArray)
 
 /**
- * Message Keys for usage in encryption algorithms.
- *
- * You can use this to initialize a cipher like ChaCha20-Poly1305.
- *
- * Example:
- *
- *
- * @property cipherKey Secret key for cipher
- * @property macKey Secret key for MAC
- * @property iv Initialization vector
+ * Double ratchet header
  */
-class MessageKeys(val bytes: ByteArray) {
-    val cipherKey: ByteArray
-    val macKey: ByteArray
-    val iv: ByteArray
+class Header(
+    val dhPublicKey: ByteArray,
+    val lastSendingChainMessageAmount: Int,
+    val messageNumber: Int,
+) {
+    fun toBytes(): ByteArray {
+        val buffer = ByteBuffer.allocate(dhPublicKey.size + 8)
 
-    init {
-        val prk = HKDF.extract(ByteArray(32), this.bytes)
-        val result = HKDF.expand(prk, "AegisMessageKey".toByteArray(), 72)
+        buffer.put(dhPublicKey)
+        buffer.putInt(lastSendingChainMessageAmount)
+        buffer.putInt(messageNumber)
 
-        this.cipherKey = result.copyOfRange(0, 32)
-        this.macKey = result.copyOfRange(32, 64)
-        this.iv = result.copyOfRange(64, 72)
+        return buffer.array()
+    }
+
+    companion object {
+        fun fromBytes(bytes: ByteArray): Header {
+            val buffer = ByteBuffer.wrap(bytes)
+
+            val dhPublicKey = ByteArray(32)
+            buffer.get(dhPublicKey)
+            val lastSendingChainMessageAmount = buffer.int
+            val messageNumber = buffer.int
+
+            return Header(dhPublicKey, lastSendingChainMessageAmount, messageNumber)
+        }
     }
 }
