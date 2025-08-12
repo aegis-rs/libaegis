@@ -1,12 +1,7 @@
 package dev.teamnight.aegis.libaegis
 
 import dev.teamnight.aegis.libaegis.crypto.ECDHResult
-import dev.teamnight.aegis.libaegis.key.ChainKey
-import dev.teamnight.aegis.libaegis.key.MessageKeys
-import dev.teamnight.aegis.libaegis.key.RatchetKey
-import dev.teamnight.aegis.libaegis.key.RootKey
-import dev.teamnight.aegis.libaegis.key.publicKeyFromRaw
-import dev.teamnight.aegis.libaegis.key.raw
+import dev.teamnight.aegis.libaegis.key.*
 import java.io.Serializable
 import java.nio.ByteBuffer
 import java.security.PublicKey
@@ -42,8 +37,7 @@ class DoubleRatchet private constructor(
      */
     constructor(
         keys: Pair<RootKey, ChainKey>,
-        receivedRatchetKey: RatchetKey?,
-        ownRatchetKey: RatchetKey = RatchetKey.generate()
+        receivedRatchetKey: RatchetKey?
     ) : this(
         keys.first,
         receivedRatchetKey,
@@ -52,11 +46,6 @@ class DoubleRatchet private constructor(
     ) {
         if(receivedRatchetKey != null) {
             receivingChainKey = keys.second
-
-            val pair = rootKey.nextRootKey(ECDHResult(ownRatchetKey.privateKey!!, receivedRatchetKey.publicKey!!))
-
-            rootKey = pair.first
-            sendingChainKey = pair.second
         } else {
             sendingChainKey = keys.second
         }
@@ -69,6 +58,14 @@ class DoubleRatchet private constructor(
      * @return The encrypted message
      */
     fun encrypt(message: ByteArray): Ciphertext {
+        if (sendingChainKey == null) {
+            //Late init to be able to read the first messages using the initial root key
+            val pair = rootKey.nextRootKey(ECDHResult(ownRatchetKey.privateKey!!, receivedRatchetKey!!.publicKey!!))
+
+            rootKey = pair.first
+            sendingChainKey = pair.second
+        }
+
         val chainKey = sendingChainKey ?: throw IllegalStateException("Cannot encrypt without sending chain key")
 
         this.sendingChainKey = chainKey.nextChainKey()
@@ -80,11 +77,7 @@ class DoubleRatchet private constructor(
         val header = Header(ownRatchetKey.publicKey!!.raw, lastSendingChainMessageAmount, sendingMessageNumber)
         val headerBytes = header.toBytes()
 
-        val aeadBytes = ByteArray(headerBytes.size + 12)
-
         val messageKeys = chainKey.messageKeys
-        messageKeys.iv.copyInto(aeadBytes)
-        headerBytes.copyInto(aeadBytes, 12)
 
         sendingMessageNumber++
 
@@ -94,7 +87,7 @@ class DoubleRatchet private constructor(
         cipher.init(Cipher.ENCRYPT_MODE, spec, paramSpec)
         cipher.updateAAD(headerBytes)
 
-        return Ciphertext(cipher.doFinal(message), aeadBytes)
+        return Ciphertext(cipher.doFinal(message), headerBytes)
     }
 
     /**
@@ -106,14 +99,6 @@ class DoubleRatchet private constructor(
      * @return The decrypted message
      */
     fun decrypt(ciphertext: Ciphertext): ByteArray {
-        //Update chain key
-        val chainKey = receivingChainKey ?: throw IllegalStateException("Cannot decrypt without receiving chain key")
-        val messageKeys = chainKey.messageKeys
-
-        this.receivingChainKey = chainKey.nextChainKey()
-
-        //TODO: Add processing skipped chain keys
-
         val header = Header.fromBytes(ciphertext.headerBytes)
         val headerPublicKey = publicKeyFromRaw(header.dhPublicKey)
 
@@ -128,13 +113,19 @@ class DoubleRatchet private constructor(
 
         if(!headerPublicKey.encoded.contentEquals(receivedRatchetKey?.publicKey?.encoded)) {
             skipMessages(header.lastSendingChainMessageAmount)
-            doRatchet(header, RatchetKey(headerPublicKey))
+            doRatchet(RatchetKey(headerPublicKey))
         }
 
         //Skip to message number of this ciphertext
         skipMessages(header.messageNumber)
 
         receivingMessageNumber++
+
+        //Update chain key
+        val chainKey = receivingChainKey ?: throw IllegalStateException("Cannot decrypt without receiving chain key")
+        val messageKeys = chainKey.messageKeys
+
+        this.receivingChainKey = chainKey.nextChainKey()
 
         return doDecrypt(ciphertext, messageKeys)
     }
@@ -160,7 +151,7 @@ class DoubleRatchet private constructor(
         return cipher.doFinal(ciphertext.bytes)
     }
 
-    private fun doRatchet(header: Header, receivedKey: RatchetKey) {
+    private fun doRatchet(receivedKey: RatchetKey) {
         this.lastSendingChainMessageAmount = this.sendingMessageNumber
         this.sendingMessageNumber = 0
         this.receivingMessageNumber = 0
@@ -177,7 +168,7 @@ class DoubleRatchet private constructor(
         this.ownRatchetKey = RatchetKey.generate()
 
         val ecdh2 = ECDHResult(ownRatchetKey.privateKey!!, receivedKey.publicKey)
-        val pair2 = rootKey.nextRootKey(ecdh)
+        val pair2 = rootKey.nextRootKey(ecdh2)
 
         this.rootKey = pair2.first
         this.sendingChainKey = pair2.second

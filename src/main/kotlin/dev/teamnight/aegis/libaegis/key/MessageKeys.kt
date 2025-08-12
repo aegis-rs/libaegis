@@ -20,11 +20,11 @@ class MessageKeys(val bytes: ByteArray) {
     val iv: ByteArray
 
     init {
-        val prk = HKDF.Companion.extract(ByteArray(32), this.bytes)
-        val result = HKDF.Companion.expand(prk, "AegisMessageKey".toByteArray(), 72)
+        val prk = HKDF.extract(ByteArray(32), this.bytes)
+        val result = HKDF.expand(prk, "AegisMessageKey".toByteArray(), 76)
 
         this.cipherKey = result.copyOfRange(0, 32)
         this.macKey = result.copyOfRange(32, 64)
-        this.iv = result.copyOfRange(64, 72)
+        this.iv = result.copyOfRange(64, 76)
     }
 }
