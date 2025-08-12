@@ -5,7 +5,7 @@ import java.security.PrivateKey
 import java.security.PublicKey
 
 data class RatchetKey(
-    val publicKey: PublicKey? = null,
+    val publicKey: PublicKey,
     val privateKey: PrivateKey? = null
 ) {
     companion object {

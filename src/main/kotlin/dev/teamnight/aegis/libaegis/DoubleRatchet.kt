@@ -2,12 +2,15 @@ package dev.teamnight.aegis.libaegis
 
 import dev.teamnight.aegis.libaegis.crypto.ECDHResult
 import dev.teamnight.aegis.libaegis.key.*
-import java.io.Serializable
 import java.nio.ByteBuffer
 import java.security.PublicKey
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import javax.security.auth.Destroyable
+
+const val MAX_SKIP = 1000
+const val MAX_SKIPPED_MESSAGES = 10000
 
 class DoubleRatchet private constructor(
     var rootKey: RootKey,
@@ -16,8 +19,7 @@ class DoubleRatchet private constructor(
     var receivingChainKey: ChainKey? = null,
     var sendingChainKey: ChainKey? = null,
     val skippedMessageKeys: MutableMap<Pair<PublicKey, Int>, MessageKeys> = mutableMapOf()
-) : Serializable {
-
+) : AutoCloseable, Destroyable {
     var lastSendingChainMessageAmount: Int = 0
     var sendingMessageNumber: Int = 0
     var receivingMessageNumber: Int = 0
@@ -60,7 +62,10 @@ class DoubleRatchet private constructor(
     fun encrypt(message: ByteArray): Ciphertext {
         if (sendingChainKey == null) {
             //Late init to be able to read the first messages using the initial root key
-            val pair = rootKey.nextRootKey(ECDHResult(ownRatchetKey.privateKey!!, receivedRatchetKey!!.publicKey!!))
+            requireNotNull(receivedRatchetKey)
+            { "SendingChainKey or ReceivedRatchetKey must be initialized before encrypting" }
+
+            val pair = rootKey.nextRootKey(ECDHResult(ownRatchetKey.privateKey!!, receivedRatchetKey!!.publicKey))
 
             rootKey = pair.first
             sendingChainKey = pair.second
@@ -70,11 +75,7 @@ class DoubleRatchet private constructor(
 
         this.sendingChainKey = chainKey.nextChainKey()
 
-        if(ownRatchetKey.publicKey == null) {
-            throw IllegalStateException("Own ratchet public key is null?")
-        }
-
-        val header = Header(ownRatchetKey.publicKey!!.raw, lastSendingChainMessageAmount, sendingMessageNumber)
+        val header = Header(ownRatchetKey.publicKey.raw, lastSendingChainMessageAmount, sendingMessageNumber)
         val headerBytes = header.toBytes()
 
         val messageKeys = chainKey.messageKeys
@@ -97,6 +98,8 @@ class DoubleRatchet private constructor(
      *
      * @param ciphertext The ciphertext to decrypt
      * @return The decrypted message
+     *
+     * @throws javax.crypto.AEADBadTagException if decryption fails due to an invalid tag, you should renew the root key
      */
     fun decrypt(ciphertext: Ciphertext): ByteArray {
         val header = Header.fromBytes(ciphertext.headerBytes)
@@ -131,11 +134,25 @@ class DoubleRatchet private constructor(
     }
 
     private fun skipMessages(until: Int) {
+        require(Int.MAX_VALUE - MAX_SKIP > receivingMessageNumber) { "Skip exceeds Int.MAX_VALUE" }
+
+        if (receivingMessageNumber + MAX_SKIP < until) {
+            throw IllegalArgumentException("Cannot skip more than $MAX_SKIP messages")
+        }
+
         while(receivingMessageNumber < until) {
-            val chainKey = receivingChainKey ?: throw IllegalStateException("Cannot decrypt without receiving chain key")
+            val chainKey = receivingChainKey
+                ?: throw IllegalStateException("Cannot decrypt without receiving chain key")
+
+            requireNotNull(receivedRatchetKey) { "Cannot skip messages without a received ratchet key" }
 
             this.receivingChainKey = chainKey.nextChainKey()
-            this.skippedMessageKeys[Pair(receivedRatchetKey!!.publicKey!!, receivingMessageNumber)] = chainKey.messageKeys
+
+            if (skippedMessageKeys.size >= MAX_SKIPPED_MESSAGES) {
+                throw IllegalStateException("Skipped message keys map exceeds maximum size")
+            }
+
+            this.skippedMessageKeys[Pair(receivedRatchetKey!!.publicKey, receivingMessageNumber)] = chainKey.messageKeys
             this.receivingMessageNumber++
         }
     }
@@ -158,7 +175,7 @@ class DoubleRatchet private constructor(
 
         this.receivedRatchetKey = receivedKey
 
-        val ecdh = ECDHResult(ownRatchetKey.privateKey!!, receivedKey.publicKey!!)
+        val ecdh = ECDHResult(ownRatchetKey.privateKey!!, receivedKey.publicKey)
         val pair = rootKey.nextRootKey(ecdh)
 
         this.rootKey = pair.first
@@ -172,6 +189,17 @@ class DoubleRatchet private constructor(
 
         this.rootKey = pair2.first
         this.sendingChainKey = pair2.second
+    }
+
+    override fun close() = this.destroy()
+
+    override fun destroy() {
+        this.rootKey.bytes.fill(0)
+        this.receivingChainKey?.bytes?.fill(0)
+        this.sendingChainKey?.bytes?.fill(0)
+        this.receivedRatchetKey?.privateKey?.destroy()
+        this.ownRatchetKey.privateKey?.destroy()
+        this.skippedMessageKeys.clear()
     }
 
     companion object {
@@ -228,13 +256,19 @@ class Header(
     }
 
     companion object {
+        const val MIN_HEADER_LENGTH = 32 + 4 + 4
+
         fun fromBytes(bytes: ByteArray): Header {
+            require(bytes.size >= MIN_HEADER_LENGTH) { "Invalid header length" }
             val buffer = ByteBuffer.wrap(bytes)
 
             val dhPublicKey = ByteArray(32)
             buffer.get(dhPublicKey)
             val lastSendingChainMessageAmount = buffer.int
             val messageNumber = buffer.int
+
+            require(messageNumber >= 0) { "Message number cannot be negative" }
+            require(lastSendingChainMessageAmount >= 0) { "Last sending chain message amount cannot be negative" }
 
             return Header(dhPublicKey, lastSendingChainMessageAmount, messageNumber)
         }
