@@ -1,4 +1,4 @@
-package dev.teamnight.aegis.libaegis.key
+package dev.teamnight.aegis.libaegis.crypto.key
 
 import dev.teamnight.aegis.libaegis.crypto.HKDF
 

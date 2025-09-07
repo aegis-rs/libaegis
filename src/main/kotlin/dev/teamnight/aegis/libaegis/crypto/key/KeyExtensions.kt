@@ -1,4 +1,4 @@
-package dev.teamnight.aegis.libaegis.key
+package dev.teamnight.aegis.libaegis.crypto.key
 
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.util.PublicKeyFactory

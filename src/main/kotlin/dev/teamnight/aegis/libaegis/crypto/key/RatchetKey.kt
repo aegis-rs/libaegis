@@ -1,4 +1,4 @@
-package dev.teamnight.aegis.libaegis.key
+package dev.teamnight.aegis.libaegis.crypto.key
 
 import java.security.KeyPairGenerator
 import java.security.PrivateKey

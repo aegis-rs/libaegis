@@ -1,8 +1,8 @@
-package dev.teamnight.aegis.libaegis.key
+package dev.teamnight.aegis.libaegis.crypto.key
 
 import dev.teamnight.aegis.libaegis.crypto.ECDHResult
 import dev.teamnight.aegis.libaegis.crypto.HKDF
-import dev.teamnight.aegis.libaegis.key.RootKey.Companion.INITIAL_ROOT_KEY_INFO
+import dev.teamnight.aegis.libaegis.crypto.key.RootKey.Companion.INITIAL_ROOT_KEY_INFO
 import java.security.PrivateKey
 import java.security.PublicKey
 
