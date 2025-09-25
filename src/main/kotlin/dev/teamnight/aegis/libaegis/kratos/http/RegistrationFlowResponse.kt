@@ -13,7 +13,9 @@ class RegistrationFlowResponse(
     val ui: UiResponse,
     val organizationId: String?,
     val state: State
-)
+) {
+    constructor() : this("", "", "", "", "", UiResponse(), null, State.CHOOSE_METHOD)
+}
 
 enum class State {
     CHOOSE_METHOD,
