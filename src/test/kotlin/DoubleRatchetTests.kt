@@ -1,9 +1,9 @@
-import dev.teamnight.aegis.libaegis.Ciphertext
-import dev.teamnight.aegis.libaegis.DoubleRatchet
+import dev.teamnight.aegis.libaegis.crypto.Ciphertext
+import dev.teamnight.aegis.libaegis.crypto.DoubleRatchet
 import dev.teamnight.aegis.libaegis.crypto.ECDHResult
-import dev.teamnight.aegis.libaegis.key.ChainKey
-import dev.teamnight.aegis.libaegis.key.RatchetKey
-import dev.teamnight.aegis.libaegis.key.RootKey
+import dev.teamnight.aegis.libaegis.crypto.key.ChainKey
+import dev.teamnight.aegis.libaegis.crypto.key.RatchetKey
+import dev.teamnight.aegis.libaegis.crypto.key.RootKey
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security
 import kotlin.test.Test

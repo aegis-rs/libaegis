@@ -1,7 +1,6 @@
-package dev.teamnight.aegis.libaegis
+package dev.teamnight.aegis.libaegis.crypto
 
-import dev.teamnight.aegis.libaegis.crypto.ECDHResult
-import dev.teamnight.aegis.libaegis.key.*
+import dev.teamnight.aegis.libaegis.crypto.key.*
 import java.nio.ByteBuffer
 import java.security.PublicKey
 import javax.crypto.Cipher
