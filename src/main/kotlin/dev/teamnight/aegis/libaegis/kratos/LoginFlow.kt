@@ -5,20 +5,16 @@ import kotlinx.coroutines.future.await
 import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
-import java.util.*
 
-class RegistrationFlow(kratosApi: KratosApi) : Flow(kratosApi) {
+class LoginFlow(kratosApi: KratosApi) : Flow(kratosApi) {
     var state: State? = null
 
-    private var username: String? = null
-    private var email: String? = null
-
     override suspend fun createFlow() {
-        getCreateFlow("self-service/registration/api")
+        getCreateFlow("self-service/login/api")
     }
 
     override fun updateFlowData(body: String?) {
-        val json = kratosApi.objectMapper.readValue(body, RegistrationFlowResponse::class.java)
+        val json = kratosApi.objectMapper.readValue(body, LoginFlowResponse::class.java)
 
         this.flowId = json.id
         this.nextAction = json.ui.action
@@ -27,13 +23,13 @@ class RegistrationFlow(kratosApi: KratosApi) : Flow(kratosApi) {
         this.ui = this.elementFactory(json.ui, kratosApi.objectMapper)
     }
 
-    suspend fun update(username: String, email: String) {
-        val requestBody = ProfileRegistrationFlowSubmitRequest(Traits(username, email, username))
+    suspend fun completePassword(identifier: String, password: String): LoginSubmitResponse {
+        val requestBody = PasswordLoginRequest(password, identifier)
 
         val jsonBody = kratosApi.objectMapper.writeValueAsString(requestBody)
 
         val request = HttpRequest.newBuilder()
-            .uri(URI.create("${kratosApi.baseUrl}/self-service/registration?flow=$flowId"))
+            .uri(URI.create("${kratosApi.baseUrl}/self-service/login?flow=$flowId"))
             .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
             .header("Content-Type", "application/json")
             .build()
@@ -45,15 +41,17 @@ class RegistrationFlow(kratosApi: KratosApi) : Flow(kratosApi) {
 
         when (response.statusCode()) {
             200 -> {
-                //This is cause Ory Kratos returns an 400 error with the new fields, cause 200 would mean that
-                //the registration was finished
-                throw IllegalStateException("Registration flow returned 200 even though it should have returned 400.")
+                val json = kratosApi.objectMapper.readValue(body, LoginSubmitResponse::class.java)
+
+                kratosApi.sessionToken = json.sessionToken
+                kratosApi.session = json.session
+
+                return json
             }
 
             400 -> {
-                this.username = username
-                this.email = email
                 updateFlowData(body)
+                throw IllegalArgumentException("Login flow returned 400")
             }
 
             else -> {
@@ -63,19 +61,19 @@ class RegistrationFlow(kratosApi: KratosApi) : Flow(kratosApi) {
         }
     }
 
-    suspend fun complete(password: String): RegistrationFlowSubmitResponse {
-        Objects.requireNonNull(username)
-        Objects.requireNonNull(email)
+    suspend fun completeTOTP(code: String): LoginSubmitResponse {
+        if (kratosApi.sessionToken == null) {
+            throw IllegalArgumentException("Session token is not set in Kratos API class")
+        }
 
-        val requestBody =
-            PasswordRegistrationFlowSubmitRequest(Traits(this.username!!, this.email!!, this.username!!), password)
-
+        val requestBody = TotpLoginRequest(code)
         val jsonBody = kratosApi.objectMapper.writeValueAsString(requestBody)
 
         val request = HttpRequest.newBuilder()
-            .uri(URI.create("${kratosApi.baseUrl}/self-service/registration?flow=$flowId"))
+            .uri(URI.create("${kratosApi.baseUrl}/self-service/login?flow=$flowId"))
             .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
             .header("Content-Type", "application/json")
+            .header("X-Session-Token", kratosApi.sessionToken)
             .build()
 
         val response = kratosApi.httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
@@ -84,10 +82,18 @@ class RegistrationFlow(kratosApi: KratosApi) : Flow(kratosApi) {
         val body = response.body()
 
         when (response.statusCode()) {
-            200 -> Unit
+            200 -> {
+                val json = kratosApi.objectMapper.readValue(body, LoginSubmitResponse::class.java)
+
+                kratosApi.sessionToken = json.sessionToken
+                kratosApi.session = json.session
+
+                return json
+            }
+
             400 -> {
                 updateFlowData(body)
-                throw IllegalArgumentException("Registration flow returned 400")
+                throw IllegalArgumentException("Login flow returned 400")
             }
 
             else -> {
@@ -95,9 +101,5 @@ class RegistrationFlow(kratosApi: KratosApi) : Flow(kratosApi) {
                 throw KratosErrorException(json.error)
             }
         }
-
-        val json = kratosApi.objectMapper.readValue(body, RegistrationFlowSubmitResponse::class.java)
-
-        return json
     }
 }

@@ -2,6 +2,7 @@ package dev.teamnight.aegis.libaegis.kratos.http
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
 import com.fasterxml.jackson.databind.annotation.JsonNaming
+import dev.teamnight.aegis.libaegis.kratos.State
 
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 class RegistrationFlowResponse(
@@ -17,8 +18,3 @@ class RegistrationFlowResponse(
     constructor() : this("", "", "", "", "", UiResponse(), null, State.CHOOSE_METHOD)
 }
 
-enum class State {
-    CHOOSE_METHOD,
-    SENT_EMAIL,
-    PASSED_CHALLENGE
-}

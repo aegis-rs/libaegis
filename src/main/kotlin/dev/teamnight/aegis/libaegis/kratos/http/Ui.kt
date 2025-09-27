@@ -6,10 +6,10 @@ import com.fasterxml.jackson.databind.node.NullNode
 class UiResponse(
     val action: String,
     val method: String,
-    val messages: Array<UiResponseText>,
+    val messages: Array<UiResponseText>? = null,
     val nodes: Array<UiResponseNode>
 ) {
-    constructor() : this("", "", emptyArray(), emptyArray())
+    constructor() : this("", "", null, emptyArray())
 }
 
 class UiResponseNode(
