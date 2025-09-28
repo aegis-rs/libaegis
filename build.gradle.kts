@@ -1,37 +1,99 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
-    kotlin("jvm") version "2.2.0"
+    kotlin("multiplatform") version "2.2.0"
+    kotlin("plugin.serialization") version "2.2.0"
+    id("com.android.library") version "8.7.3"
     id("maven-publish")
 }
 
 group = "dev.teamnight.aegis"
-version = "1.0-SNAPSHOT"
+version = "1.0-ALPHA"
 
 repositories {
+    google()
     mavenCentral()
-}
-
-dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.10.2")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.20.0")
-    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.20.0")
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.20.0")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.81")
-    testImplementation(kotlin("test"))
-}
-
-tasks.test {
-    useJUnitPlatform()
 }
 
 kotlin {
     jvmToolchain(22)
+
+    jvm()
+    androidTarget {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_11)
+        }
+    }
+    listOf(
+        iosX64(),
+        iosArm64(),
+        iosSimulatorArm64()
+    ).forEach { iosTarget ->
+        iosTarget.binaries.framework {
+            baseName = "libaegis"
+            isStatic = true
+        }
+    }
+
+    sourceSets {
+        val commonMain by getting {
+            dependencies {
+                implementation(libs.kotlinx.coroutines.core)
+                implementation(libs.kotlinx.serialization)
+                implementation(libs.ktor.client.core)
+                implementation(libs.ktor.client.cio)
+            }
+        }
+
+        val commonTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+            }
+        }
+
+        val jvmMain by getting {
+            dependencies {
+                implementation(libs.kotlinx.coroutines.jdk8)
+                implementation(libs.bouncycastle)
+            }
+        }
+
+        val androidMain by getting {
+            dependsOn(jvmMain)
+        }
+
+        val iosMain by creating {
+            dependsOn(commonMain)
+        }
+
+        val iosX64Main by getting {
+            dependsOn(iosMain)
+        }
+        val iosArm64Main by getting {
+            dependsOn(iosMain)
+        }
+        val iosSimulatorArm64Main by getting {
+            dependsOn(iosMain)
+        }
+    }
+}
+
+android {
+    namespace = "dev.teamnight.aegis"
+    compileSdk = 34
+    defaultConfig {
+        minSdk = 33
+    }
+}
+
+tasks.named<Test>("jvmTest") {
+    useJUnitPlatform()
 }
 
 publishing {
     publications {
         create<MavenPublication>("release") {
-            from(components["java"])
+            from(components["kotlin"])
         }
     }
 
