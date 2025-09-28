@@ -91,12 +91,6 @@ tasks.named<Test>("jvmTest") {
 }
 
 publishing {
-    publications {
-        create<MavenPublication>("release") {
-            from(components["kotlin"])
-        }
-    }
-
     repositories {
         maven {
             name = "github"
