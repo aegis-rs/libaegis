@@ -1,6 +1,7 @@
 package dev.teamnight.aegis.libaegis.crypto.key
 
 import dev.teamnight.aegis.libaegis.crypto.HKDF
+import io.ktor.utils.io.core.*
 
 /**
  * Message Keys for usage in encryption algorithms.
