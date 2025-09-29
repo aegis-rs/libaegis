@@ -1,29 +1,24 @@
 package dev.teamnight.aegis.libaegis.crypto
 
+import dev.teamnight.aegis.libaegis.crypto.algorithm.ChaCha20Poly1305
+import dev.teamnight.aegis.libaegis.crypto.algorithm.ECDHResult
 import dev.teamnight.aegis.libaegis.crypto.key.*
 
 const val MAX_SKIP = 1000
 const val MAX_SKIPPED_MESSAGES = 10000
 
-expect class DoubleRatchet private constructor(
-    rootKey: RootKey,
-    receivedRatchetKey: RatchetKey? = null,
-    ownRatchetKey: RatchetKey = RatchetKey.generate(),
-    receivingChainKey: ChainKey? = null,
-    sendingChainKey: ChainKey? = null,
-    skippedMessageKeys: MutableMap<Pair<PublicKey, Int>, MessageKeys> = mutableMapOf()
+class DoubleRatchet private constructor(
+    var rootKey: RootKey,
+    var receivedRatchetKey: RatchetKey? = null,
+    var ownRatchetKey: RatchetKey = RatchetKey.generate(),
+    var receivingChainKey: ChainKey? = null,
+    var sendingChainKey: ChainKey? = null,
+    val skippedMessageKeys: MutableMap<Pair<PublicKey, Int>, MessageKeys> = mutableMapOf()
 ) : AutoCloseable {
-    var rootKey: RootKey
-    var receivedRatchetKey: RatchetKey?
-    var ownRatchetKey: RatchetKey
-    var receivingChainKey: ChainKey?
-    var sendingChainKey: ChainKey?
 
-    val skippedMessageKeys: MutableMap<Pair<PublicKey, Int>, MessageKeys>
-
-    var lastSendingChainMessageAmount: Int
-    var sendingMessageNumber: Int
-    var receivingMessageNumber: Int
+    var lastSendingChainMessageAmount: Int = 0
+    var sendingMessageNumber: Int = 0
+    var receivingMessageNumber: Int = 0
 
     /**
      * Creates a new double ratchet state from the given keys.
@@ -41,7 +36,18 @@ expect class DoubleRatchet private constructor(
     constructor(
         keys: Pair<RootKey, ChainKey>,
         receivedRatchetKey: RatchetKey?
-    )
+    ) : this(
+        keys.first,
+        receivedRatchetKey,
+        receivingChainKey = null,
+        sendingChainKey = null
+    ) {
+        if (receivedRatchetKey != null) {
+            receivingChainKey = keys.second
+        } else {
+            sendingChainKey = keys.second
+        }
+    }
 
     /**
      * Encrypts the given message using the sending chain key.
@@ -49,7 +55,35 @@ expect class DoubleRatchet private constructor(
      * @param message The message to encrypt
      * @return The encrypted message
      */
-    fun encrypt(message: ByteArray): Ciphertext
+    fun encrypt(message: ByteArray): Ciphertext {
+        if (sendingChainKey == null) {
+            //Late init to be able to read the first messages using the initial root key
+            requireNotNull(receivedRatchetKey)
+            { "SendingChainKey or ReceivedRatchetKey must be initialized before encrypting" }
+
+            val pair = rootKey.nextRootKey(ECDHResult(ownRatchetKey.privateKey!!, receivedRatchetKey!!.publicKey))
+
+            rootKey = pair.first
+            sendingChainKey = pair.second
+        }
+
+        val chainKey = sendingChainKey ?: throw IllegalStateException("Cannot encrypt without sending chain key")
+
+        this.sendingChainKey = chainKey.nextChainKey()
+
+        val header =
+            Header(ownRatchetKey.publicKey.raw, lastSendingChainMessageAmount, sendingMessageNumber)
+        val headerBytes = header.toBytes()
+
+        val messageKeys = chainKey.messageKeys
+
+        sendingMessageNumber++
+
+        return Ciphertext(
+            ChaCha20Poly1305.encrypt(messageKeys.cipherKey, messageKeys.iv, message, headerBytes),
+            headerBytes
+        )
+    }
 
     /**
      * Decrypts the given ciphertext using the receiving chain key.
@@ -61,9 +95,105 @@ expect class DoubleRatchet private constructor(
      *
      * @throws javax.crypto.AEADBadTagException if decryption fails due to an invalid tag, you should renew the root key
      */
-    fun decrypt(ciphertext: Ciphertext): ByteArray
+    fun decrypt(ciphertext: Ciphertext): ByteArray {
+        val header = Header.fromBytes(ciphertext.headerBytes)
+        val headerPublicKey = PublicKey.fromRaw(header.dhPublicKey)
 
-    override fun close()
+        val skippedPair = Pair(headerPublicKey, header.messageNumber)
+
+        if (skippedMessageKeys.containsKey(skippedPair)) {
+            val skippedMessageKeys = skippedMessageKeys[skippedPair]!!
+            this.skippedMessageKeys.remove(skippedPair)
+
+            return ChaCha20Poly1305.decrypt(
+                skippedMessageKeys.cipherKey,
+                skippedMessageKeys.iv,
+                ciphertext.bytes,
+                ciphertext.headerBytes
+            )
+        }
+
+        if (!headerPublicKey.encoded.contentEquals(receivedRatchetKey?.publicKey?.encoded)) {
+            skipMessages(header.lastSendingChainMessageAmount)
+            doRatchet(RatchetKey(headerPublicKey))
+        }
+
+        //Skip to message number of this ciphertext
+        skipMessages(header.messageNumber)
+
+        receivingMessageNumber++
+
+        //Update chain key
+        val chainKey = receivingChainKey ?: throw IllegalStateException("Cannot decrypt without receiving chain key")
+        val messageKeys = chainKey.messageKeys
+
+        this.receivingChainKey = chainKey.nextChainKey()
+
+        return ChaCha20Poly1305.decrypt(
+            messageKeys.cipherKey,
+            messageKeys.iv,
+            ciphertext.bytes,
+            ciphertext.headerBytes
+        )
+    }
+
+    private fun skipMessages(until: Int) {
+        require(Int.MAX_VALUE - MAX_SKIP > receivingMessageNumber) { "Skip exceeds Int.MAX_VALUE" }
+
+        if (receivingMessageNumber + MAX_SKIP < until) {
+            throw IllegalArgumentException("Cannot skip more than $MAX_SKIP messages")
+        }
+
+        while (receivingMessageNumber < until) {
+            val chainKey = receivingChainKey
+                ?: throw IllegalStateException("Cannot decrypt without receiving chain key")
+
+            requireNotNull(receivedRatchetKey) { "Cannot skip messages without a received ratchet key" }
+
+            this.receivingChainKey = chainKey.nextChainKey()
+
+            if (skippedMessageKeys.size >= MAX_SKIPPED_MESSAGES) {
+                throw IllegalStateException("Skipped message keys map exceeds maximum size")
+            }
+
+            this.skippedMessageKeys[Pair(receivedRatchetKey!!.publicKey, receivingMessageNumber)] = chainKey.messageKeys
+            this.receivingMessageNumber++
+        }
+    }
+
+    private fun doRatchet(receivedKey: RatchetKey) {
+        this.lastSendingChainMessageAmount = this.sendingMessageNumber
+        this.sendingMessageNumber = 0
+        this.receivingMessageNumber = 0
+
+        this.receivedRatchetKey = receivedKey
+
+        val ecdh = ECDHResult(ownRatchetKey.privateKey!!, receivedKey.publicKey)
+        val pair = rootKey.nextRootKey(ecdh)
+
+        this.rootKey = pair.first
+        this.receivingChainKey = pair.second
+
+        //Generate new DH Ratchet key
+        this.ownRatchetKey = RatchetKey.generate()
+
+        val ecdh2 = ECDHResult(ownRatchetKey.privateKey!!, receivedKey.publicKey)
+        val pair2 = rootKey.nextRootKey(ecdh2)
+
+        this.rootKey = pair2.first
+        this.sendingChainKey = pair2.second
+    }
+
+    override fun close() = this.destroy()
+
+    fun destroy() {
+        this.rootKey.bytes.fill(0)
+        this.receivingChainKey?.bytes?.fill(0)
+        this.sendingChainKey?.bytes?.fill(0)
+        this.receivedRatchetKey?.privateKey?.destroy()
+        this.ownRatchetKey.privateKey?.destroy()
+        this.skippedMessageKeys.clear()
+    }
 
     companion object {
         /**
@@ -79,7 +209,22 @@ expect class DoubleRatchet private constructor(
             receivingMessageNumber: Int,
             sendingMessageNumber: Int,
             skippedMessageKeys: MutableMap<Pair<PublicKey, Int>, MessageKeys>
-        ): DoubleRatchet
+        ): DoubleRatchet {
+            val dh = DoubleRatchet(
+                rootKey,
+                receivedRatchetKey,
+                ownRatchetKey,
+                receivingChainKey,
+                sendingChainKey,
+                skippedMessageKeys
+            )
+
+            dh.lastSendingChainMessageAmount = lastSendingChainMessageAmount
+            dh.receivingMessageNumber = receivingMessageNumber
+            dh.sendingMessageNumber = sendingMessageNumber
+
+            return dh
+        }
     }
 }
 

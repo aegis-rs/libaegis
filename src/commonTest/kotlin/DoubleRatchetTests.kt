@@ -1,21 +1,15 @@
 import dev.teamnight.aegis.libaegis.crypto.Ciphertext
 import dev.teamnight.aegis.libaegis.crypto.DoubleRatchet
-import dev.teamnight.aegis.libaegis.crypto.ECDHResult
-import dev.teamnight.aegis.libaegis.crypto.key.*
-import org.bouncycastle.jce.provider.BouncyCastleProvider
-import java.security.Security
+import dev.teamnight.aegis.libaegis.crypto.algorithm.ECDHResult
+import dev.teamnight.aegis.libaegis.crypto.key.ChainKey
+import dev.teamnight.aegis.libaegis.crypto.key.RatchetKey
+import dev.teamnight.aegis.libaegis.crypto.key.RootKey
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
 class DoubleRatchetTests {
-
-    companion object {
-        init {
-            Security.addProvider(BouncyCastleProvider())
-        }
-    }
 
     private data class X3DHKeys(
         val aliceRoot: RootKey,
@@ -125,11 +119,9 @@ class DoubleRatchetTests {
         val keys = generateX3DHKeys()
 
         val alice = DoubleRatchet(keys.aliceRoot to keys.aliceChain, receivedRatchetKey = null)
-        val aliceBC = java.security.KeyPairGenerator.getInstance("X25519", "BC").genKeyPair()
-        alice.ownRatchetKey = RatchetKey(JavaPublicKey(aliceBC.public), JavaPrivateKey(aliceBC.private))
+        alice.ownRatchetKey = RatchetKey.Companion.generate()
         val bob = DoubleRatchet(keys.bobRoot to keys.bobChain, receivedRatchetKey = alice.ownRatchetKey)
-        val bobBC = java.security.KeyPairGenerator.getInstance("X25519", "BC").genKeyPair()
-        bob.ownRatchetKey = RatchetKey(JavaPublicKey(bobBC.public), JavaPrivateKey(bobBC.private))
+        bob.ownRatchetKey = RatchetKey.Companion.generate()
 
         val transcript = listOf(
             "m1 from Alice",

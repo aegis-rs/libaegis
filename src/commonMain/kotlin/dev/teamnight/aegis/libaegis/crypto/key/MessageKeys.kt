@@ -1,6 +1,6 @@
 package dev.teamnight.aegis.libaegis.crypto.key
 
-import dev.teamnight.aegis.libaegis.crypto.HKDF
+import dev.teamnight.aegis.libaegis.crypto.algorithm.HKDF
 import io.ktor.utils.io.core.*
 
 /**
