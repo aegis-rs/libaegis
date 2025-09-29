@@ -1,38 +1,52 @@
 package dev.teamnight.aegis.libaegis.crypto.key
 
-import javax.security.auth.Destroyable
 import java.security.Key as JvmKey
 import java.security.PrivateKey as JvmPrivateKey
 import java.security.PublicKey as JvmPublicKey
 
-actual interface Key : Destroyable {
-    fun toJavaKey(): JvmKey
+actual interface Key {
+    val jvmKey: JvmKey
 }
 
 actual interface PublicKey : Key {
-    fun toJavaPublicKey(): JvmPublicKey
+    val jvmPublicKey: JvmPublicKey
 
-    override fun toJavaKey(): JvmKey = toJavaPublicKey() as JvmKey
+    override val jvmKey
+        get() = jvmPublicKey
+
+    actual val raw: ByteArray
+    actual val encoded: ByteArray
+
+    actual companion object {
+        actual fun fromRaw(raw: ByteArray): PublicKey {
+            return publicKeyFromRaw(raw)
+        }
+    }
 }
 
 actual interface PrivateKey : Key {
-    fun toJavaPrivateKey(): JvmPrivateKey
+    val jvmPrivateKey: JvmPrivateKey
 
-    override fun toJavaKey(): JvmKey = toJavaPrivateKey() as JvmKey
+    override val jvmKey
+        get() = jvmPrivateKey
+
+    actual fun destroy()
 }
 
 class JavaPublicKey(
-    val publicKey: JvmPublicKey,
+    override val jvmPublicKey: JvmPublicKey,
 ) : PublicKey {
-    override fun toJavaPublicKey(): JvmPublicKey = publicKey
+    override val raw: ByteArray
+        get() = jvmPublicKey.raw
+
+    override val encoded: ByteArray
+        get() = jvmPublicKey.encoded
 }
 
 class JavaPrivateKey(
-    val privateKey: JvmPrivateKey,
+    override val jvmPrivateKey: JvmPrivateKey,
 ) : PrivateKey {
-    override fun toJavaPrivateKey(): JvmPrivateKey = privateKey
-
     override fun destroy() {
-        privateKey.destroy()
+        jvmPrivateKey.destroy()
     }
 }

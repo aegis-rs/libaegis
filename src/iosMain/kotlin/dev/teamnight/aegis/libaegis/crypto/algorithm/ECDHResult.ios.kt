@@ -1,4 +1,4 @@
-package dev.teamnight.aegis.libaegis.crypto
+package dev.teamnight.aegis.libaegis.crypto.algorithm
 
 import dev.teamnight.aegis.libaegis.crypto.key.PrivateKey
 import dev.teamnight.aegis.libaegis.crypto.key.PublicKey

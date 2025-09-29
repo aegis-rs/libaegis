@@ -1,4 +1,4 @@
-package dev.teamnight.aegis.libaegis.crypto
+package dev.teamnight.aegis.libaegis.crypto.algorithm
 
 import org.bouncycastle.crypto.digests.SHA256Digest
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator

@@ -1,7 +1,7 @@
 package dev.teamnight.aegis.libaegis.crypto.key
 
-import dev.teamnight.aegis.libaegis.crypto.ECDHResult
-import dev.teamnight.aegis.libaegis.crypto.HKDF
+import dev.teamnight.aegis.libaegis.crypto.algorithm.ECDHResult
+import dev.teamnight.aegis.libaegis.crypto.algorithm.HKDF
 import dev.teamnight.aegis.libaegis.crypto.key.RootKey.Companion.INITIAL_ROOT_KEY_INFO
 
 /**

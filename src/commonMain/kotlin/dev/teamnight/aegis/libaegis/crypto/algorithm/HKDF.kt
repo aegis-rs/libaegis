@@ -1,4 +1,4 @@
-package dev.teamnight.aegis.libaegis.crypto
+package dev.teamnight.aegis.libaegis.crypto.algorithm
 
 expect class HKDF {
     companion object {

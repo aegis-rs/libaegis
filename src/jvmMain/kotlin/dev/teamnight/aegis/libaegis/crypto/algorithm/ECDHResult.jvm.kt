@@ -1,4 +1,4 @@
-package dev.teamnight.aegis.libaegis.crypto
+package dev.teamnight.aegis.libaegis.crypto.algorithm
 
 import dev.teamnight.aegis.libaegis.crypto.key.PrivateKey
 import dev.teamnight.aegis.libaegis.crypto.key.PublicKey
@@ -9,8 +9,8 @@ actual class ECDHResult actual constructor(privateKey: PrivateKey, publicKey: Pu
 
     init {
         val ka = KeyAgreement.getInstance("X25519")
-        ka.init(privateKey.toJavaPrivateKey())
-        ka.doPhase(publicKey.toJavaPublicKey(), true)
+        ka.init(privateKey.jvmPrivateKey)
+        ka.doPhase(publicKey.jvmPublicKey, true)
 
         this.arrayResult = ka.generateSecret()
     }
