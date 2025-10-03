@@ -2,6 +2,8 @@ package dev.teamnight.aegis.libaegis.kratos
 
 import dev.teamnight.aegis.libaegis.kratos.http.KratosSession
 import io.ktor.client.*
+import io.ktor.client.request.*
+import io.ktor.http.*
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNamingStrategy
@@ -44,5 +46,16 @@ class KratosApi(
     suspend fun refreshSession() {
         val flow = WhoAmIFlow(this)
         flow.createFlow()
+    }
+
+    suspend fun isReady(): Boolean {
+        val response = this.httpClient.get {
+            url {
+                appendPathSegments(baseUrl, "health", "ready")
+            }
+            accept(ContentType.Application.Json)
+        }
+
+        return response.status.value == 200
     }
 }
