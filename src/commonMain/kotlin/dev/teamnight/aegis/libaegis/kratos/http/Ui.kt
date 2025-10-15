@@ -1,5 +1,6 @@
 package dev.teamnight.aegis.libaegis.kratos.http
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
@@ -29,7 +30,12 @@ class UiResponseText(
 )
 
 enum class UiResponseTextType {
+    @SerialName("info")
     INFO,
+
+    @SerialName("error")
     ERROR,
+
+    @SerialName("success")
     SUCCESS
 }
