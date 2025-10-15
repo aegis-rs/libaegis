@@ -1,6 +1,7 @@
 package dev.teamnight.aegis.libaegis.kratos.ui
 
 import dev.teamnight.aegis.libaegis.kratos.http.UiResponse
+import dev.teamnight.aegis.libaegis.kratos.http.UiResponseText
 import dev.teamnight.aegis.libaegis.kratos.http.UiResponseTextType
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -69,18 +70,11 @@ fun defaultElementFactory(response: UiResponse, mapper: Json): List<Element> {
     return response.nodes.map { node ->
         val attributes = node.attributes.asSequence().associate { it.key to it.value }
         val messages = node.messages.map { msg ->
-            Text(
-                msg.id.toString(),
-                msg.text,
-                when (msg.type) {
-                    UiResponseTextType.SUCCESS -> TextType.SUCCESS
-                    UiResponseTextType.ERROR -> TextType.ERROR
-                    else -> TextType.INFO
-                }
-            )
+            convertUiResponseTextToText(msg)
         }.toTypedArray()
         val meta = if (node.meta["label"] != null) {
-            ElementMeta(label = mapper.decodeFromJsonElement<Text>(node.meta["label"]!!))
+            val label = mapper.decodeFromJsonElement<UiResponseText>(node.meta["label"]!!)
+            ElementMeta(label = convertUiResponseTextToText(label))
         } else null
 
         when (node.type) {
@@ -96,4 +90,16 @@ fun defaultElementFactory(response: UiResponse, mapper: Json): List<Element> {
             else -> TextFieldElement(node.group, emptyMap(), emptyArray(), null)
         }
     }
+}
+
+private fun convertUiResponseTextToText(text: UiResponseText): Text {
+    return Text(
+        text.id.toString(),
+        text.text,
+        when (text.type) {
+            UiResponseTextType.SUCCESS -> TextType.SUCCESS
+            UiResponseTextType.ERROR -> TextType.ERROR
+            else -> TextType.INFO
+        }
+    )
 }

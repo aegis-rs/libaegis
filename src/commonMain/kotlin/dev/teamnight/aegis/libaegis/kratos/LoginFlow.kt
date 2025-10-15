@@ -1,75 +1,75 @@
 package dev.teamnight.aegis.libaegis.kratos
 
 import dev.teamnight.aegis.libaegis.kratos.http.*
+import dev.teamnight.aegis.libaegis.kratos.ui.Element
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
+import kotlinx.coroutines.flow.MutableStateFlow
 
-class LoginFlow(kratosApi: KratosApi) : Flow(kratosApi) {
-    var state: State? = null
-
-    override suspend fun createFlow() {
-        getCreateFlow("self-service/login/api")
-    }
-
-    override fun updateFlowData(body: String) {
-        val json = kratosApi.json.decodeFromString<LoginFlowResponse>(body)
-
-        this.flowId = json.id
-        this.nextAction = json.ui.action
-        this.nextMethod = json.ui.method
-        this.state = json.state
-        this.ui = this.elementFactory(json.ui, kratosApi.json)
-    }
-
-    suspend fun completePassword(identifier: String, password: String): LoginSubmitResponse {
-        val requestBody = PasswordLoginRequest(password, identifier)
-
-        val jsonBody = kratosApi.json.encodeToString(requestBody)
-
-        val response = kratosApi.httpClient.post {
+class LoginFlow(
+    kratosApi: KratosApi,
+    elementFactory: ElementFactory,
+    val updateSessionState: suspend (KratosSession, String) -> Unit
+) : AbstractFlow(kratosApi, elementFactory) {
+    override suspend fun create(): FlowState {
+        val response = kratosApi.httpClient.get {
             url {
-                appendPathSegments(kratosApi.baseUrl, "/self-service/login?flow=$flowId")
+                takeFrom(Url(kratosApi.baseUrl))
+                appendPathSegments("self-service", "login", "api")
             }
-            contentType(ContentType.Application.Json)
-            setBody(jsonBody)
+            accept(ContentType.Application.Json)
         }
 
         val body = response.body<String>()
 
-        when (response.status.value) {
-            200 -> {
-                val json = kratosApi.json.decodeFromString<LoginSubmitResponse>(body)
-
-                kratosApi.sessionToken = json.sessionToken
-                kratosApi.session = json.session
-
-                return json
-            }
-
-            400 -> {
-                updateFlowData(body)
-                throw IllegalArgumentException("Login flow returned 400")
-            }
-
-            else -> {
-                val json = kratosApi.json.decodeFromString<ErrorResponse>(body)
-                throw KratosErrorException(json.error)
-            }
+        if (response.status.value != 200) {
+            val json = kratosApi.json.decodeFromString<ErrorResponse>(body)
+            throw KratosErrorException(json.error)
         }
+
+        val json = kratosApi.json.decodeFromString<LoginFlowResponse>(body)
+
+        this.mutableState = MutableStateFlow(
+            LoginFlowStateStep(
+                flowId = json.id,
+                data = LoginData(
+                    flowId = json.id,
+                    nextAction = json.ui.action,
+                    method = json.ui.method,
+                    state = json.state,
+                    ui = this.elementFactory(json.ui, kratosApi.json)
+                )
+            )
+        )
+
+        return this.mutableState.value
     }
 
-    suspend fun completeTOTP(code: String): LoginSubmitResponse {
-        if (kratosApi.sessionToken == null) {
-            throw IllegalArgumentException("Session token is not set in Kratos API class")
+    suspend fun completePassword(identifier: String, password: String): FlowState {
+        val requestBody = PasswordLoginRequest(password, identifier)
+        this.performSubmit(kratosApi.json.encodeToString(requestBody))
+
+        return this.mutableState.value
+    }
+
+    suspend fun completeTOTP(identifier: String, code: String): FlowState {
+        if (kratosApi.session.value == null) {
+            throw IllegalArgumentException("Session is not set in Kratos API class")
         }
 
         val requestBody = TotpLoginRequest(code)
-        val jsonBody = kratosApi.json.encodeToString(requestBody)
+        this.performSubmit(kratosApi.json.encodeToString(requestBody))
 
+        return this.mutableState.value
+    }
+
+    suspend fun performSubmit(jsonBody: String) {
         val response = kratosApi.httpClient.post {
             url {
-                appendPathSegments(kratosApi.baseUrl, "/self-service/login?flow=$flowId")
+                takeFrom(Url(kratosApi.baseUrl))
+                appendPathSegments("self-service", "login")
+                parameters.append("flow", mutableState.value.flowId)
             }
             contentType(ContentType.Application.Json)
             setBody(jsonBody)
@@ -81,17 +81,30 @@ class LoginFlow(kratosApi: KratosApi) : Flow(kratosApi) {
             200 -> {
                 val json = kratosApi.json.decodeFromString<LoginSubmitResponse>(body)
 
-                kratosApi.sessionToken = json.sessionToken
-                kratosApi.session = json.session
-
-                return json
+                this.updateSessionState(json.session, json.sessionToken)
+                this.mutableState.emit(
+                    LoginFlowStateCompleted(
+                        mutableState.value.flowId,
+                        json
+                    )
+                )
             }
-
             400 -> {
-                updateFlowData(body)
-                throw IllegalArgumentException("Login flow returned 400")
-            }
+                val json = kratosApi.json.decodeFromString<LoginFlowResponse>(body)
 
+                this.mutableState.emit(
+                    LoginFlowStateStep(
+                        flowId = json.id,
+                        data = LoginData(
+                            flowId = json.id,
+                            nextAction = json.ui.action,
+                            method = json.ui.method,
+                            state = json.state,
+                            ui = this.elementFactory(json.ui, kratosApi.json)
+                        )
+                    )
+                )
+            }
             else -> {
                 val json = kratosApi.json.decodeFromString<ErrorResponse>(body)
                 throw KratosErrorException(json.error)
@@ -99,3 +112,21 @@ class LoginFlow(kratosApi: KratosApi) : Flow(kratosApi) {
         }
     }
 }
+
+data class LoginFlowStateStep(
+    override val flowId: String,
+    override val data: LoginData,
+) : FlowStateCreated<LoginData>, FlowStateUpdated<LoginData>
+
+data class LoginFlowStateCompleted(
+    override val flowId: String,
+    override val result: LoginSubmitResponse,
+) : FlowStateCompleted<LoginSubmitResponse>
+
+class LoginData(
+    flowId: String,
+    nextAction: String,
+    method: String,
+    state: State,
+    ui: List<Element>
+) : FlowData(flowId, nextAction, method, state, ui)

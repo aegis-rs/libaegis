@@ -1,15 +1,21 @@
 package dev.teamnight.aegis.libaegis.kratos.http
 
-open class RegistrationFlowSubmitRequest(
-    val method: String,
-    val traits: Traits
-)
+import kotlinx.serialization.Serializable
 
+@Serializable
+sealed class RegistrationFlowSubmitRequest(
+    val method: String
+) {
+    abstract val traits: Traits
+}
+
+@Serializable
 class ProfileRegistrationFlowSubmitRequest(
-    traits: Traits,
-) : RegistrationFlowSubmitRequest("profile", traits)
+    override val traits: Traits,
+) : RegistrationFlowSubmitRequest("profile")
 
+@Serializable
 class PasswordRegistrationFlowSubmitRequest(
-    traits: Traits,
+    override val traits: Traits,
     val password: String,
-) : RegistrationFlowSubmitRequest("password", traits)
+) : RegistrationFlowSubmitRequest("password")
