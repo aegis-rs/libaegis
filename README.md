@@ -1,5 +1,7 @@
 # libaegis - Library for the Aegis Chat application
 
+> **Warning**: The library is currently work in progress and should not be used for real world projects.
+
 ## Overview
 This library currently consists of two main components:
 
