@@ -14,6 +14,23 @@ import kotlinx.serialization.json.ClassDiscriminatorMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNamingStrategy
 
+/**
+ * API Client for interacting with Ory Kratos.
+ *
+ * This client provides methods for login, registration and other flows.
+ *
+ * @param baseUrl The base url of the Kratos instance.
+ *
+ * @sample
+ * ```kotlin
+ * val kratosApi = KratosApi("http://localhost:4434")
+ * val loginFlow = kratosApi.createLoginFlow()
+ *
+ * if(loginFlow.state is LoginFlowStateStep) {
+ *     // Do something with the state
+ * }
+ * ```
+ */
 class KratosApi(
     val baseUrl: String,
     private val _session: MutableStateFlow<KratosSession?> = MutableStateFlow(null),
