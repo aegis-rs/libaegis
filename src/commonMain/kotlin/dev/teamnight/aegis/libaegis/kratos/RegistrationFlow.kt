@@ -1,7 +1,7 @@
 package dev.teamnight.aegis.libaegis.kratos
 
 import dev.teamnight.aegis.libaegis.kratos.http.*
-import dev.teamnight.aegis.libaegis.kratos.ui.Element
+import dev.teamnight.aegis.libaegis.kratos.ui.Form
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
@@ -86,6 +86,7 @@ class RegistrationFlow(
                     )
                 )
             }
+
             400 -> {
                 val json = kratosApi.json.decodeFromString<RegistrationFlowResponse>(body)
 
@@ -99,11 +100,12 @@ class RegistrationFlow(
                             nextAction = json.ui.action,
                             method = json.ui.method,
                             state = json.state,
-                            ui = this.elementFactory(json.ui, kratosApi.json)
+                            ui = this.elementFactory(json.ui, kratosApi.json),
                         )
                     )
                 )
             }
+
             else -> {
                 val json = kratosApi.json.decodeFromString<ErrorResponse>(body)
                 throw KratosErrorException(json.error)
@@ -139,12 +141,17 @@ open class RegistrationData(
     nextAction: String,
     method: String,
     state: State,
-    ui: List<Element>,
+    ui: Form,
 ) : FlowData(flowId, nextAction, method, state, ui)
 
 class IdentityRegistrationData(
     val username: String,
-    val email: String, flowId: String, nextAction: String, method: String, state: State, ui: List<Element>,
+    val email: String,
+    flowId: String,
+    nextAction: String,
+    method: String,
+    state: State,
+    ui: Form
 ) : RegistrationData(flowId, nextAction, method, state, ui) {
     fun toPasswordParams(password: String): RegistrationParams =
         RegistrationParams.Password(Traits(username, email, username), password)

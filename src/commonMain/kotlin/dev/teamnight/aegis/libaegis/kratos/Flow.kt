@@ -1,7 +1,7 @@
 package dev.teamnight.aegis.libaegis.kratos
 
 import dev.teamnight.aegis.libaegis.kratos.http.UiResponse
-import dev.teamnight.aegis.libaegis.kratos.ui.Element
+import dev.teamnight.aegis.libaegis.kratos.ui.Form
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,7 +19,7 @@ interface Flow {
     /**
      * Returns the current state as state flow.
      */
-    suspend fun getStateAsStateFlow(): StateFlow<FlowState>
+    fun getStateAsStateFlow(): StateFlow<FlowState>
 
     /**
      * Returns the state of the last response of this flow.
@@ -63,7 +63,7 @@ abstract class AbstractFlow(
     override val state: FlowState
         get() = mutableState.value
 
-    override suspend fun getStateAsStateFlow(): StateFlow<FlowState> {
+    override fun getStateAsStateFlow(): StateFlow<FlowState> {
         return mutableState.asStateFlow()
     }
 }
@@ -83,7 +83,7 @@ abstract class FlowData(
     val nextAction: String,
     val method: String,
     val state: State,
-    val ui: List<Element>
+    val ui: Form,
 )
 
-typealias ElementFactory = (UiResponse, Json) -> List<Element>
+typealias ElementFactory = (UiResponse, Json) -> Form

@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "dev.teamnight.aegis"
-version = "1.0-ALPHA-2"
+version = "1.0-ALPHA-3"
 
 repositories {
     google()

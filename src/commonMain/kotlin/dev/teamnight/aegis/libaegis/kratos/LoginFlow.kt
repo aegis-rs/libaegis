@@ -1,7 +1,7 @@
 package dev.teamnight.aegis.libaegis.kratos
 
 import dev.teamnight.aegis.libaegis.kratos.http.*
-import dev.teamnight.aegis.libaegis.kratos.ui.Element
+import dev.teamnight.aegis.libaegis.kratos.ui.Form
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
@@ -128,5 +128,5 @@ class LoginData(
     nextAction: String,
     method: String,
     state: State,
-    ui: List<Element>
+    ui: Form
 ) : FlowData(flowId, nextAction, method, state, ui)
