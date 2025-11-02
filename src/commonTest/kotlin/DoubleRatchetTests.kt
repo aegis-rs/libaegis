@@ -1,7 +1,6 @@
 import dev.teamnight.aegis.libaegis.crypto.Ciphertext
 import dev.teamnight.aegis.libaegis.crypto.DoubleRatchet
 import dev.teamnight.aegis.libaegis.crypto.algorithm.ECDHResult
-import dev.teamnight.aegis.libaegis.crypto.key.ChainKey
 import dev.teamnight.aegis.libaegis.crypto.key.RatchetKey
 import dev.teamnight.aegis.libaegis.crypto.key.RootKey
 import kotlin.test.Test
@@ -13,9 +12,7 @@ class DoubleRatchetTests {
 
     private data class X3DHKeys(
         val aliceRoot: RootKey,
-        val aliceChain: ChainKey,
         val bobRoot: RootKey,
-        val bobChain: ChainKey,
         val aliceIk: RatchetKey,
         val aliceEk: RatchetKey,
         val bobIk: RatchetKey,
@@ -25,13 +22,13 @@ class DoubleRatchetTests {
 
     private fun generateX3DHKeys(): X3DHKeys {
         // Alice keys
-        val aliceIk = RatchetKey.Companion.generate()
-        val aliceEk = RatchetKey.Companion.generate()
+        val aliceIk = RatchetKey.generate()
+        val aliceEk = RatchetKey.generate()
 
         // Bob keys
-        val bobIk = RatchetKey.Companion.generate()
-        val bobSpk = RatchetKey.Companion.generate()
-        val bobOpk = RatchetKey.Companion.generate()
+        val bobIk = RatchetKey.generate()
+        val bobSpk = RatchetKey.generate()
+        val bobOpk = RatchetKey.generate()
 
         // Alice computes DH1..DH4
         val a1 = ECDHResult(aliceIk.privateKey!!, bobSpk.publicKey!!)
@@ -39,7 +36,7 @@ class DoubleRatchetTests {
         val a3 = ECDHResult(aliceEk.privateKey!!, bobSpk.publicKey!!)
         val a4 = ECDHResult(aliceEk.privateKey!!, bobOpk.publicKey!!)
 
-        val (aliceRoot, aliceChain) = RootKey.Companion.generateInitialRootKey(arrayOf(a1, a2, a3, a4))
+        val aliceRoot = RootKey.generateInitialRootKey(arrayOf(a1, a2, a3, a4))
 
         // Bob computes mirrored DH1..DH4 in the same order
         val b1 = ECDHResult(bobSpk.privateKey!!, aliceIk.publicKey!!)
@@ -47,9 +44,9 @@ class DoubleRatchetTests {
         val b3 = ECDHResult(bobSpk.privateKey!!, aliceEk.publicKey!!)
         val b4 = ECDHResult(bobOpk.privateKey!!, aliceEk.publicKey!!)
 
-        val (bobRoot, bobChain) = RootKey.Companion.generateInitialRootKey(arrayOf(b1, b2, b3, b4))
+        val bobRoot = RootKey.generateInitialRootKey(arrayOf(b1, b2, b3, b4))
 
-        return X3DHKeys(aliceRoot, aliceChain, bobRoot, bobChain, aliceIk, aliceEk, bobIk, bobSpk, bobOpk)
+        return X3DHKeys(aliceRoot, bobRoot, aliceIk, aliceEk, bobIk, bobSpk, bobOpk)
     }
 
     @Test
@@ -58,12 +55,11 @@ class DoubleRatchetTests {
 
         assertContentEquals(keys.aliceRoot.bytes, keys.bobRoot.bytes, "Root keys must match for both parties")
         assertContentEquals(
-            keys.aliceChain.bytes,
-            keys.bobChain.bytes,
-            "Initial chain keys must match for both parties"
+            keys.aliceRoot.bytes,
+            keys.bobRoot.bytes,
+            "Initial root keys must match for both parties"
         )
         assertEquals(32, keys.aliceRoot.bytes.size)
-        assertEquals(32, keys.aliceChain.bytes.size)
     }
 
     @Test
@@ -71,10 +67,10 @@ class DoubleRatchetTests {
         val keys = generateX3DHKeys()
 
         // Alice (initiator) will send first; provide sending chain to Alice
-        val alice = DoubleRatchet(keys.aliceRoot to keys.aliceChain, receivedRatchetKey = null)
+        val alice = DoubleRatchet(keys.aliceRoot, keys.bobSpk)
 
         // Bob initializes with receiving chain and Alice's current ratchet public key so no extra ratchet on first decrypt
-        val bob = DoubleRatchet(keys.bobRoot to keys.bobChain, receivedRatchetKey = alice.ownRatchetKey)
+        val bob = DoubleRatchet(keys.bobRoot, alice.ownRatchetKey, keys.bobSpk)
 
         val message = "Hello, Bob!".encodeToByteArray()
         val ct = alice.encrypt(message)
@@ -94,8 +90,8 @@ class DoubleRatchetTests {
     fun testAnswerAfterInitialMessageExchange() {
         val keys = generateX3DHKeys()
 
-        val alice = DoubleRatchet(keys.aliceRoot to keys.aliceChain, receivedRatchetKey = null)
-        val bob = DoubleRatchet(keys.bobRoot to keys.bobChain, receivedRatchetKey = alice.ownRatchetKey)
+        val alice = DoubleRatchet(keys.aliceRoot, receivedRatchetKey = keys.bobSpk)
+        val bob = DoubleRatchet(keys.bobRoot, alice.ownRatchetKey, keys.bobSpk)
 
         // Alice -> Bob
         val ct1 = alice.encrypt("Hi Bob".encodeToByteArray())
@@ -118,10 +114,8 @@ class DoubleRatchetTests {
     fun testFiveMessageExchanges() {
         val keys = generateX3DHKeys()
 
-        val alice = DoubleRatchet(keys.aliceRoot to keys.aliceChain, receivedRatchetKey = null)
-        alice.ownRatchetKey = RatchetKey.Companion.generate()
-        val bob = DoubleRatchet(keys.bobRoot to keys.bobChain, receivedRatchetKey = alice.ownRatchetKey)
-        bob.ownRatchetKey = RatchetKey.Companion.generate()
+        val alice = DoubleRatchet(keys.aliceRoot, receivedRatchetKey = keys.bobSpk)
+        val bob = DoubleRatchet(keys.bobRoot, alice.ownRatchetKey, keys.bobSpk)
 
         val transcript = listOf(
             "m1 from Alice",

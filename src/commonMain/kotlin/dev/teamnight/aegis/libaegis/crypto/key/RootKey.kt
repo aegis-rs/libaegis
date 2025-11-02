@@ -28,7 +28,7 @@ class RootKey(val bytes: ByteArray) {
          *
          * @return The root key
          */
-        fun generateInitialRootKey(results: Array<ECDHResult>): Pair<RootKey, ChainKey> {
+        fun generateInitialRootKey(results: Array<ECDHResult>): RootKey {
             require(results.size == 3 || results.size == 4) { "DH results must contain 3 or 4 elements" }
             val len = results.sumOf { it.arrayResult.size }
 
@@ -44,11 +44,9 @@ class RootKey(val bytes: ByteArray) {
             val masterSecret = HKDF.extract(ByteArray(32), result)
 
             //Generate initial root key and chain key
-            val combinedKeys = HKDF.expand(masterSecret, INITIAL_ROOT_KEY_INFO, 64)
-            val rootKey = combinedKeys.copyOfRange(0, 32)
-            val chainKey = combinedKeys.copyOfRange(32, 64)
+            val rootKey = HKDF.expand(masterSecret, INITIAL_ROOT_KEY_INFO, 32)
 
-            return RootKey(rootKey) to ChainKey(chainKey)
+            return RootKey(rootKey)
         }
     }
 }

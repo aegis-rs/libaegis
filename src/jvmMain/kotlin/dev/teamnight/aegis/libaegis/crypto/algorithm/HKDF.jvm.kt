@@ -23,5 +23,10 @@ actual class HKDF {
 
             return result
         }
+
+        actual fun generateOutput(salt: ByteArray, ikm: ByteArray, info: ByteArray, length: Int): ByteArray {
+            val prk = extract(salt, ikm)
+            return expand(prk, info, length)
+        }
     }
 }

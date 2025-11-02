@@ -23,30 +23,71 @@ class DoubleRatchet private constructor(
     /**
      * Creates a new double ratchet state from the given keys.
      *
+     * When starting a Double Ratchet with a partner, one side needs to start the exchange of the secret key, request
+     * a ratchet key and generate a random ratchet key. If you are this side, use this constructor. If you are the side,
+     * that received a generated ratchet key, then use the other constructor.
+     *
+     * For example, if you exchange the shared secret using X3DH and you are the side that uses their pre-key bundle,
+     * then you would use this constructor. This constructor will generate the ratchet key for you and use the ratchet
+     * key from the pre-key bundle, e.g. the Server Signed Pre-Key.
+     *
+     * This constructor will put you in the state to send and receive messages.
+     *
      * **Do not use this constructor when trying to reinstantiate an already established double ratchet state, this
      * will result in an invalid state on the other side! Instead, use [DoubleRatchet.fromExisting]**
      *
-     * If the received ratchet key is not null, the chain key provided will be treated as the receiving chain key,
-     * otherwise it will be treated as the sending chain key.
-     *
-     * @param keys The root key and the chain key to use
+     * @param initialRootKey The initial root key
      * @param receivedRatchetKey The received ratchet key
      * @param ownRatchetKey The own ratchet key
      */
     constructor(
-        keys: Pair<RootKey, ChainKey>,
-        receivedRatchetKey: RatchetKey?
+        initialRootKey: RootKey,
+        receivedRatchetKey: RatchetKey
     ) : this(
-        keys.first,
+        initialRootKey,
         receivedRatchetKey,
         receivingChainKey = null,
         sendingChainKey = null
     ) {
-        if (receivedRatchetKey != null) {
-            receivingChainKey = keys.second
-        } else {
-            sendingChainKey = keys.second
-        }
+        val keys = initialRootKey.nextRootKey(
+            ECDHResult(
+                this.ownRatchetKey.privateKey!!,
+                receivedRatchetKey.publicKey
+            )
+        )
+
+        this.rootKey = keys.first
+        this.sendingChainKey = keys.second
+    }
+
+    /**
+     * Creates a new double ratchet state from the given keys.
+     *
+     * When starting a Double Ratchet with a partner, one side needs to start the exchange of the secret key, request
+     * a ratchet key and generate a random ratchet key. If you are the other side, use this constructor.
+     *
+     * Please only use this constructor when you are the side that pre-published a key bundle containing their ratchet
+     * key for this step.
+     *
+     * This constructor will put you in the state to send and receive messages.
+     *
+     * **Do not use this constructor when trying to reinstantiate an already established double ratchet state, this
+     * will result in an invalid state on the other side! Instead, use [DoubleRatchet.fromExisting]**
+     *
+     * @see [DoubleRatchet]
+     */
+    constructor(
+        initialRootKey: RootKey,
+        receivedRatchetKey: RatchetKey,
+        ownRatchetKey: RatchetKey
+    ) : this(
+        initialRootKey,
+        receivedRatchetKey,
+        ownRatchetKey,
+        receivingChainKey = null,
+        sendingChainKey = null
+    ) {
+        doRatchet(receivedRatchetKey)
     }
 
     /**
@@ -56,16 +97,7 @@ class DoubleRatchet private constructor(
      * @return The encrypted message
      */
     fun encrypt(message: ByteArray): Ciphertext {
-        if (sendingChainKey == null) {
-            //Late init to be able to read the first messages using the initial root key
-            requireNotNull(receivedRatchetKey)
-            { "SendingChainKey or ReceivedRatchetKey must be initialized before encrypting" }
-
-            val pair = rootKey.nextRootKey(ECDHResult(ownRatchetKey.privateKey!!, receivedRatchetKey!!.publicKey))
-
-            rootKey = pair.first
-            sendingChainKey = pair.second
-        }
+        requireNotNull(sendingChainKey) { "SendingChainKey must be initialized before encrypting" }
 
         val chainKey = sendingChainKey ?: throw IllegalStateException("Cannot encrypt without sending chain key")
 
